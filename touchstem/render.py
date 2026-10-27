@@ -46,6 +46,7 @@ class Layout:
     ink: list[tuple[str, float, float, float]] = field(default_factory=list)  # text, x, y, size
     warnings: list[str] = field(default_factory=list)
     texture: object = field(default_factory=Polygon)   # low relief (grid points etc.), excluded from spacing rules
+    hotspots: list[dict] = field(default_factory=list)  # touchable regions for the living sheet (mm, plate coords)
     corner: float = 8.0                                  # orientation cut, top-left corner (mm)
 
 
@@ -87,6 +88,7 @@ def build_diagram(c: Circuit, spec: Spec | None = None, lang: str = "ru") -> Lay
         return (spec.margin + n.x * grid, spec.margin + n.y * grid)
 
     shapes = []
+    hotspots: list[dict] = []
     letter_dots: list[tuple[float, float]] = []
     label_jobs = []  # (element, mid, d, n, half_width)
 
@@ -125,11 +127,15 @@ def build_diagram(c: Circuit, spec: Spec | None = None, lang: str = "ru") -> Lay
             letter_dots += place_cells(br.cells, cx - w / 2, cy - h / 2, spec)
         if e.key:
             label_jobs.append((e, mid, d, nrm, sym.half_width * scale))
+            hotspots.append({"id": e.id, "key": e.key, "type": e.type, "x": round(mid[0], 1), "y": round(mid[1], 1),
+                             "r": round(max(hl, sym.half_width * scale) + 5, 1)})
 
     for nid in c.nodes:
         if c.degree(nid) >= 3:
             x, y = P(nid)
             shapes.append(LineString([(x, y), (x + 0.01, y)]).buffer(spec.junction_r))
+            hotspots.append({"id": "node:" + nid, "key": None, "type": "junction", "x": round(x, 1), "y": round(y, 1),
+                             "r": 5.0})
 
     raised = unary_union(shapes)
     obstacles = [raised.buffer(spec.label_gap)]
@@ -166,8 +172,11 @@ def build_diagram(c: Circuit, spec: Spec | None = None, lang: str = "ru") -> Lay
         dots += place_cells(br.cells, cx - w / 2, cy - h / 2, spec)
         obstacles.append(rect.buffer(spec.label_gap / 2))
         ink.append((str(e.key), cx, cy - h / 2 - 2.5, 3.2))
+        for hs in hotspots:   # the braille number also answers when touched
+            if hs["id"] == e.id:
+                hs["lx"], hs["ly"] = round(cx, 1), round(cy, 1)
 
-    return Layout(W, H, raised, dots, ink, warnings)
+    return Layout(W, H, raised, dots, ink, warnings, hotspots=hotspots)
 
 
 # ---------------------------------------------------------------- legend
@@ -286,7 +295,7 @@ def to_stl(layout: Layout, spec: Spec | None = None) -> bytes:
 
 # ---------------------------------------------------------------- export: PNG preview
 def to_png(layout: Layout, spec: Spec | None = None, dpi: int = 120, style: str = "relief",
-           show_ink: bool = True) -> bytes:
+           show_ink: bool = True, pad: float = 1.5) -> bytes:
     """style='relief': raised parts lit from the top-left like a real embossed sheet.
     style='plan': flat black drawing. Blue ink = teacher-only annotations (never printed)."""
     import matplotlib
@@ -298,14 +307,14 @@ def to_png(layout: Layout, spec: Spec | None = None, dpi: int = 120, style: str 
     spec = spec or Spec()
     W, H, k = layout.width, layout.height, layout.corner
     paper = "#f4f5f2" if style == "relief" else "white"
-    fig, ax = plt.subplots(figsize=(W / 25.4, H / 25.4), dpi=dpi)
+    fig, ax = plt.subplots(figsize=((W + 2 * pad) / 25.4, (H + 2 * pad) / 25.4), dpi=dpi)
     fig.patch.set_alpha(0)
-    ax.set_xlim(-1.5, W + 1.5)
-    ax.set_ylim(H + 1.5, -1.5)
+    ax.set_xlim(-pad, W + pad)
+    ax.set_ylim(H + pad, -pad)
     ax.set_aspect("equal")
     ax.axis("off")
     sheet = [(0, k), (k, 0), (W, 0), (W, H), (0, H)] if k else [(0, 0), (W, 0), (W, H), (0, H)]
-    if style == "relief":
+    if style == "relief" and pad > 0:
         ax.add_patch(MPoly([(x + 0.8, y + 1.0) for x, y in sheet], closed=True, fc="#00000018", ec="none"))
     ax.add_patch(MPoly(sheet, closed=True, fc=paper, ec="#c9ccc4", lw=0.6))
 

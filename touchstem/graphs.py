@@ -207,6 +207,8 @@ class GraphResult:
     legend_lines: list[str]
     analysis: Analysis
     step: float
+    geom: dict = field(default_factory=dict)      # plate mapping for the living sheet
+    samples: list = field(default_factory=list)   # y at 161 evenly spaced x (None where undefined)
 
 
 def nice_step(span: float, unit_mm: float) -> float:
@@ -349,7 +351,11 @@ def build_graph(formula: str, xr: tuple[float, float], yr: tuple[float, float], 
     for xm, ym in a.maxima[:2]:
         legend.append(t["max"].format(x=num(xm), y=num(ym)))
     lay = Layout(W, H, raised, dots, ink, warnings, texture=unary_union(texture) if texture else Polygon())
-    return GraphResult(lay, legend, a, step)
+    sx = np.linspace(x0, x1, 161)
+    sy = f(sx)
+    samples = [None if np.isnan(v) else round(float(v), 3) for v in sy]
+    geom = {"left": left, "top": top, "unit": unit, "x0": x0, "x1": x1, "y0": y0, "y1": y1, "ax_x": ax_x, "ax_y": ax_y}
+    return GraphResult(lay, legend, a, step, geom, samples)
 
 
 def graph_lesson(formula: str, xr, yr, res: GraphResult, lang: str = "ru", title: str = ""):

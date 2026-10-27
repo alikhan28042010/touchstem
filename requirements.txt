@@ -1,4 +1,4 @@
-streamlit>=1.50
+streamlit>=1.66
 shapely>=2.0
 trimesh>=4.0
 manifold3d>=3.0

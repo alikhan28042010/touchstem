@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>TouchSTEM — живой лист</title>
+<style>
+  @font-face { font-family: Plex; src: url("fonts/IBMPlexSans-sub.woff2") format("woff2"); font-weight: 100 700; }
+  @font-face { font-family: Unbounded; src: url("fonts/Unbounded-latin.woff2") format("woff2"); font-weight: 200 900; }
+  :root { --ink:#14181d; --paper:#f4f5f2; --line:#d9dcd3; --blue:#2440c8; --ok:#1e7f4f; --warn:#b7791f; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: Plex, system-ui, sans-serif; color: var(--ink); background: #fbfbf9; }
+  main { max-width: 720px; margin: 0 auto; padding: 18px 16px 40px; }
+  .word { font-family: Unbounded, sans-serif; font-weight: 700; font-size: 22px; letter-spacing: -.02em; }
+  h1 { font-size: 24px; margin: 6px 0 14px; line-height: 1.2; }
+  .stage { position: relative; background: #000; border-radius: 16px; overflow: hidden; aspect-ratio: 4/3; }
+  video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; touch-action: none; }
+  .status { display: flex; gap: 10px; flex-wrap: wrap; margin: 12px 0; font-size: 15px; }
+  .chip { padding: 6px 12px; border-radius: 999px; background: var(--paper); border: 1px solid var(--line); }
+  .chip.ok { border-color: var(--ok); color: var(--ok); } .chip.warn { border-color: var(--warn); color: var(--warn); }
+  .say { font-size: 22px; line-height: 1.4; min-height: 3.2em; background: var(--paper); border: 1px solid var(--line);
+         border-radius: 14px; padding: 14px 16px; margin: 0 0 12px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  button { font: inherit; font-size: 18px; font-weight: 600; min-height: 58px; border-radius: 14px; border: 2px solid var(--ink);
+           background: #fff; color: var(--ink); cursor: pointer; }
+  button.primary { background: var(--ink); color: #fff; }
+  button:focus-visible { outline: 4px solid var(--blue); outline-offset: 3px; }
+  .swatches { display: flex; gap: 10px; margin: 12px 0; align-items: center; flex-wrap: wrap; font-size: 15px; }
+  .sw { width: 40px; height: 40px; min-height: 0; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 0 0 2px var(--line); }
+  details { margin-top: 16px; font-size: 15px; line-height: 1.5; color: #3b4148; }
+  .err { color: #b42318; }
+</style>
+</head>
+<body>
+<main>
+  <div class="word">TouchSTEM</div>
+  <h1 id="title">Живой лист</h1>
+  <div class="stage"><video id="video" playsinline muted></video><canvas id="view" aria-hidden="true"></canvas></div>
+  <div class="status"><span class="chip" id="mk">Метки: 0 из 4</span><span class="chip" id="tip">Наклейка не видна</span></div>
+  <div class="say" id="say" role="status" aria-live="polite">Нажмите «Включить камеру» и наведите телефон на лист с метками.</div>
+  <div class="row">
+    <button class="primary" id="start">Включить камеру</button>
+    <button id="pick">Цвет наклейки</button>
+    <button id="reset">Сбросить ключи</button>
+    <button id="repeat">Повторить</button>
+  </div>
+  <div class="swatches">Наклейка:
+    <button class="sw" data-p="green" style="background:#39d353" aria-label="зелёная"></button>
+    <button class="sw" data-p="pink" style="background:#ff4fb3" aria-label="розовая"></button>
+    <button class="sw" data-p="orange" style="background:#ff8a1f" aria-label="оранжевая"></button>
+    <button class="sw" data-p="blue" style="background:#2f7bff" aria-label="синяя"></button>
+  </div>
+  <details><summary>Как пользоваться</summary>
+    <p>1. Распечатайте подложку с метками и положите пластину в рамку срезанным углом влево вверх.
+    2. Наклейте яркую наклейку на ноготь указательного пальца ученика.
+    3. Закрепите телефон над листом так, чтобы камера видела все четыре метки.
+    4. Палец задерживается на элементе — звучит название. Поднять палец и коснуться снова — значения.
+    Коснуться ключа третий раз — ключ переключается, и телефон говорит, что изменилось в цепи.</p>
+  </details>
+</main>
+<script src="vendor/cv.js"></script>
+<script src="vendor/aruco.js"></script>
+<script src="vendor/aruco_4x4_1000.js"></script>
+<script src="touch.js"></script>
+<script>
+(async function () {
+  const TS = window.TouchSTEM;
+  const $ = id => document.getElementById(id);
+  const sayBox = $('say');
+  let last = '';
+  TS.onSay = t => { last = t; sayBox.textContent = t; };
+  const m = location.hash.match(/d=([A-Za-z0-9_-]+)/);
+  if (!m) { sayBox.innerHTML = '<span class="err">Нет данных листа. Откройте ссылку из TouchSTEM или QR-код на подложке.</span>'; return; }
+  let cfg;
+  try { cfg = await TS.decode(m[1]); } catch (e) { sayBox.innerHTML = '<span class="err">Ссылка повреждена.</span>'; return; }
+  TS.setLang(cfg.l);
+  document.documentElement.lang = cfg.l;
+  if (cfg.t) $('title').textContent = cfg.t;
+  const engine = new TS.Engine(cfg);
+  window.__engine = engine;
+  const tracker = new TS.Tracker(cfg, $('video'), $('view'), engine, {
+    markers: n => { const el = $('mk'); el.textContent = 'Метки: ' + Math.min(n, 4) + ' из 4'; el.className = 'chip ' + (n >= 2 ? 'ok' : 'warn'); },
+  });
+  window.__tracker = tracker;
+  setInterval(() => { const el = $('tip'); const ok = !!window.__lastPlate; el.textContent = ok ? 'Палец на листе' : 'Наклейка не видна'; el.className = 'chip ' + (ok ? 'ok' : ''); }, 300);
+  $('start').onclick = async () => {
+    try { await tracker.start(); $('start').textContent = 'Камера включена'; TS.say(cfg.l === 'kk' ? 'Камера қосылды' : 'Камера включена'); }
+    catch (e) { sayBox.innerHTML = '<span class="err">Нет доступа к камере: разрешите камеру в браузере.</span>'; }
+  };
+  $('pick').onclick = () => { sayBox.textContent = 'Коснитесь наклейки на экране, чтобы запомнить её цвет.'; tracker.pickMode = true; };
+  $('view').addEventListener('pointerdown', e => {
+    if (!tracker.pickMode) return;
+    const r = e.target.getBoundingClientRect(), cv = e.target;
+    tracker.pickNext = [(e.clientX - r.left) / r.width * cv.width, (e.clientY - r.top) / r.height * cv.height];
+    tracker.pickMode = false; sayBox.textContent = 'Цвет наклейки запомнен.';
+  });
+  document.querySelectorAll('.sw').forEach(b => b.onclick = () => { const p = TS.PRESETS[b.dataset.p]; tracker.setHue(p[0], p[1]); sayBox.textContent = 'Цвет наклейки выбран.'; });
+  $('reset').onclick = () => { engine.state = cfg.st || 0; TS.say(cfg.l === 'kk' ? 'Кілттер бастапқы күйде' : 'Ключи в исходном положении'); };
+  $('repeat').onclick = () => TS.say(last);
+})();
+</script>
+</body>
+</html>

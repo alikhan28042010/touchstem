@@ -27,7 +27,9 @@ from touchstem.quality import check_layout, print_estimate
 from touchstem.render import Layout, Spec, build_diagram, build_legend, stl_with_volume, to_png, to_svg
 from touchstem.share import decode, encode_circuit, encode_graph, guide_url, qr_png
 from touchstem.solver import solve
+from touchstem.living import demo_html
 from touchstem.teacher import teacher_pdf
+from touchstem.touch import circuit_payload, fits_mat, graph_payload, mat_pdf, mat_svg, touch_url
 
 ROOT = Path(__file__).parent
 EXAMPLES = {"Последовательная цепь": "series.json", "Параллельные лампы": "parallel.json"}
@@ -138,10 +140,15 @@ def circuit_bundle(cjson: str, lang: str, spec_d: dict, price: float, app_url: s
     qr = qr_png(url)
     legend_lines = [t for _, t in [(0, "")] + [(k, f"{k} — {txt}") for k, txt in c.legend(lang)]]
     pdf = teacher_pdf(c.title, to_png(diagram, spec, style="plan"), legend_lines, lesson, report, est, qr, lang)
+    live = circuit_payload(c, diagram, lang)
+    live_url = touch_url(app_url, live)
     return {"diagram": diagram, "legend": legend, "legend_uni": legend_uni, "lesson": lesson, "report": report,
             "stl": stl, "stl_leg": stl_leg, "est": est, "url": url, "qr": qr, "pdf": pdf, "n": n_sym,
             "svg": to_svg(diagram, spec), "svg_leg": to_svg(legend, spec), "svg_teacher": to_svg(diagram, spec, ink=True),
-            "sol_ok": sol.ok, "title": c.title, "warnings": c.warnings}
+            "sol_ok": sol.ok, "title": c.title, "warnings": c.warnings,
+            "live_url": live_url, "live_qr": qr_png(live_url), "mat_pdf": mat_pdf(diagram, c.title, live_url, lang),
+            "mat_svg": mat_svg(diagram, spec, include_sheet=True), "fits_mat": fits_mat(diagram),
+            "demo": demo_html(live, to_png(diagram, spec, style="relief", show_ink=False, pad=0), lang)}
 
 
 @st.cache_data(show_spinner=False, max_entries=48)
@@ -160,10 +167,16 @@ def graph_bundle(formula: str, rng: tuple, title: str, lang: str, spec_d: dict, 
     qr = qr_png(url)
     pdf = teacher_pdf(title or f"y = {formula}", to_png(res.layout, spec, style="plan"), [""] + res.legend_lines,
                       lesson, report, est, qr, lang)
+    live = graph_payload(res, lang, title or f"y = {formula}")
+    live_url = touch_url(app_url, live)
     return {"diagram": res.layout, "legend": legend, "legend_uni": legend_uni, "lesson": lesson, "report": report,
             "stl": stl, "stl_leg": stl_leg, "est": est, "url": url, "qr": qr, "pdf": pdf, "n": 4,
             "svg": to_svg(res.layout, spec), "svg_leg": to_svg(legend, spec),
-            "svg_teacher": to_svg(res.layout, spec, ink=True), "title": title or f"y = {formula}", "warnings": []}
+            "svg_teacher": to_svg(res.layout, spec, ink=True), "title": title or f"y = {formula}", "warnings": [],
+            "live_url": live_url, "live_qr": qr_png(live_url),
+            "mat_pdf": mat_pdf(res.layout, title or f"y = {formula}", live_url, lang),
+            "mat_svg": mat_svg(res.layout, spec, include_sheet=True), "fits_mat": fits_mat(res.layout),
+            "demo": demo_html(live, to_png(res.layout, spec, style="relief", show_ink=False, pad=0), lang)}
 
 
 def _legend_from_lines(lines: list[str], lang: str, spec: Spec) -> Layout:
@@ -415,8 +428,32 @@ if bundle:
                     unsafe_allow_html=True)
 
     with right:
-        t_lesson, t_audio, t_check, t_files = st.tabs(["Урок", "Аудиогид", "Проверка", "Файлы"])
+        t_live, t_lesson, t_audio, t_check, t_files = st.tabs(["Живой лист", "Урок", "Аудиогид", "Проверка", "Файлы"])
         lesson = bundle["lesson"]
+        with t_live:
+            st.markdown("Пластина отвечает на касание. Телефон смотрит на лист сверху, видит наклейку на ногте ученика "
+                        "и говорит, что под пальцем. Координаты всех элементов TouchSTEM знает сам — ничего размечать не нужно.")
+            components.html(bundle["demo"], height=int(560 * bundle["diagram"].height / bundle["diagram"].width) + 190)
+            st.markdown("### Как запустить в классе")
+            st.markdown('<ol class="ts-steps">'
+                        '<li>Распечатайте подложку с метками на обычном принтере (A4).</li>'
+                        '<li>Положите пластину в рамку срезанным углом влево вверх. Для рельефной бумаги есть версия, где лист и метки на одной странице.</li>'
+                        '<li>Наклейте на ноготь ученика яркую наклейку: зелёную, розовую или оранжевую.</li>'
+                        '<li>Откройте живой лист на телефоне (QR на подложке) и закрепите телефон над листом.</li></ol>',
+                        unsafe_allow_html=True)
+            if not bundle["fits_mat"]:
+                st.warning("Лист шире свободного места на подложке. Уменьшите «Макс. ширину» в настройках до 200 мм.")
+            q1, q2 = st.columns([1, 2])
+            with q1:
+                st.image(bundle["live_qr"], width=180)
+            with q2:
+                st.download_button("Подложка с метками, PDF", bundle["mat_pdf"], "touchstem_mat.pdf",
+                                   "application/pdf", type="primary", width="stretch")
+                st.download_button("Лист с метками для рельефной бумаги, SVG", bundle["mat_svg"],
+                                   "touchstem_mat_swell.svg", width="stretch")
+                st.link_button("Открыть живой лист на этом устройстве", bundle["live_url"], width="stretch")
+            st.caption("Нужен телефон с камерой и браузером Chrome или Safari. Всё работает в браузере: "
+                       "видео никуда не отправляется.")
         with t_lesson:
             st.write(lesson.intro)
             st.markdown("### Маршрут пальца")

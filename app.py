@@ -14,9 +14,9 @@ from dataclasses import asdict
 from pathlib import Path
 
 import streamlit as st
-import streamlit.components.v1 as components
 
-from touchstem.ai import DEFAULT_MODEL, AIError, parse_circuit_image, parse_graph_image
+from touchstem import tts
+from touchstem.ai import DEFAULT_MODEL, AIError, parse_circuit_image, parse_graph_image, parse_regions_image
 from touchstem.braille import translate
 from touchstem.components import NAMES, TYPES
 from touchstem.graphs import FormulaError, build_graph, graph_lesson
@@ -24,15 +24,27 @@ from touchstem.guide import guide_html
 from touchstem.lesson import build_lesson
 from touchstem.model import Circuit, CircuitError
 from touchstem.quality import check_layout, print_estimate
-from touchstem.render import Layout, Spec, build_diagram, build_legend, stl_with_volume, to_png, to_svg
-from touchstem.share import decode, encode_circuit, encode_graph, guide_url, qr_png
+from touchstem.regions import RegionDoc, RegionError, build_regions, regions_lesson
+from touchstem.render import Layout, Spec, build_diagram, build_legend, build_text_legend, stl_with_volume, to_png, to_svg
+from touchstem.share import decode, encode_circuit, encode_graph, encode_steps, guide_url, qr_png
 from touchstem.solver import solve
 from touchstem.living import demo_html
 from touchstem.teacher import teacher_pdf
-from touchstem.touch import circuit_payload, fits_mat, graph_payload, mat_pdf, mat_svg, touch_url
+from touchstem.touch import (circuit_payload, fits_mat, graph_payload, graph_point_phrases, mat_pdf, mat_svg,
+                             payload_phrases, regions_payload, touch_url)
 
 ROOT = Path(__file__).parent
 EXAMPLES = {"Последовательная цепь": "series.json", "Параллельные лампы": "parallel.json"}
+REGION_EXAMPLES = {"План школы": "school_floor.json", "Клетка": "plant_cell.json",
+                   "Микроволновка 1:1": "microwave_panel.json"}
+MODES = {"circuit": ":material/electric_bolt: Схема", "graph": ":material/show_chart: График",
+         "regions": ":material/map: Карта, план, рисунок"}
+MODE_NOTE = {
+    "circuit": "Фото схемы из учебника физики. Лист считает токи и напряжения и отвечает, что изменится, если разомкнуть ключ.",
+    "graph": "Формула или фото графика. Палец ведёт по кривой, а высота звука показывает значение функции.",
+    "regions": "План школы, карта, клетка из биологии, органы, панель микроволновки или лифта. "
+               "Каждая часть называет себя, рассказывает, что она делает, и что находится рядом.",
+}
 GRAPH_EXAMPLES = {
     "Парабола": ("x^2 - 4", -4.0, 4.0, -5.0, 6.0),
     "Прямая": ("2x + 1", -3.0, 3.0, -5.0, 7.0),
@@ -91,6 +103,26 @@ h3 { font-size: 1.05rem !important; margin-top: .2rem !important; }
 .ts-steps { padding-left: 1.3rem; } .ts-steps li { margin: .35rem 0; line-height: 1.5; }
 .ts-meta { color: #4a525c; font-size: .92rem; }
 .ts-braille-line { font-size: 1.5rem; letter-spacing: .08em; line-height: 1.6; color: #14181D; }
+
+.st-key-mode [data-testid="stButtonGroup"] { width: 100%; }
+.st-key-mode [data-testid="stButtonGroup"] > div { display: grid !important; grid-template-columns: repeat(3, 1fr); gap: 10px; width: 100%; }
+.st-key-mode button:hover:not([aria-checked="true"]) { border-color: #14181D !important; background: #fff !important; }
+.st-key-mode button { min-height: 62px; background: #fff !important; transition: box-shadow .15s, background .15s; border-radius: 14px !important; font-size: 1.02rem; font-weight: 600;
+                      border: 1px solid #D9DCD3 !important; justify-content: flex-start; padding: 0 18px; }
+.st-key-mode button[aria-checked="true"] { background: #14181D !important; color: #fff !important; border-color: #14181D !important;
+                      box-shadow: 0 6px 18px rgba(20, 24, 29, .18); }
+.st-key-mode button[aria-checked="true"] * { color: #fff !important; }
+@media (max-width: 760px) { .st-key-mode [data-testid="stButtonGroup"] > div { grid-template-columns: 1fr; } }
+.ts-modenote { color: #3b4148; margin: 10px 0 22px; font-size: .98rem; max-width: 90ch; }
+.ts-uses { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.ts-uses span { font-size: .85rem; padding: 5px 11px; border-radius: 999px; background: #F1F2EE; border: 1px solid #E2E4DD; color: #2a3038; }
+.ts-hero-k { font-size: .78rem; letter-spacing: .12em; text-transform: uppercase; color: #2440C8; font-weight: 600; margin: 0 0 4px; }
+.ts-voice { display: inline-flex; align-items: center; gap: 9px; font-size: .88rem; color: #3b4148; padding: 6px 12px;
+            border-radius: 999px; background: #F1F2EE; border: 1px solid #E2E4DD; margin: 4px 0 10px; }
+.ts-voice i { width: 8px; height: 8px; border-radius: 50%; background: #B7791F; display: inline-block; }
+.ts-voice.ready i { background: #1E7F4F; }
+.ts-voice .bar { width: 90px; height: 5px; border-radius: 99px; background: #E2E4DD; overflow: hidden; }
+.ts-voice .bar b { display: block; height: 100%; background: #14181D; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -111,9 +143,11 @@ def header():
 <div class="ts-head">
   <div><div class="ts-word">TouchSTEM</div><div class="ts-braille" title="TouchSTEM шрифтом Брайля">{braille_wordmark("touchstem")}</div></div>
   <div>
-    <p class="ts-lede">Сфотографируйте схему из учебника или введите формулу графика. Через пару минут у вас будет
-    лист для 3D-печати или рельефной бумаги, подписи шрифтом Брайля, урок и аудиогид для ученика.</p>
+    <p class="ts-lede">Любая картинка с частями — схема, график, план школы, клетка, панель микроволновки — становится
+    рельефным листом со шрифтом Брайля. А телефон над листом слышит, где палец, и лист начинает говорить.</p>
     <div class="ts-key"><span class="raised">чёрное — будет рельефным</span><span class="teacher">синее — подсказки для учителя, не печатается</span></div>
+    <div class="ts-uses"><span>физика</span><span>алгебра</span><span>биология</span><span>география</span>
+    <span>навигация по школе</span><span>бытовая техника</span></div>
   </div>
 </div>""", unsafe_allow_html=True)
 
@@ -148,7 +182,12 @@ def circuit_bundle(cjson: str, lang: str, spec_d: dict, price: float, app_url: s
             "sol_ok": sol.ok, "title": c.title, "warnings": c.warnings,
             "live_url": live_url, "live_qr": qr_png(live_url), "mat_pdf": mat_pdf(diagram, c.title, live_url, lang),
             "mat_svg": mat_svg(diagram, spec, include_sheet=True), "fits_mat": fits_mat(diagram),
-            "demo": demo_html(live, to_png(diagram, spec, style="relief", show_ink=False, pad=0), lang)}
+            "demo": demo_html(live, to_png(diagram, spec, style="relief", show_ink=False, pad=0), lang),
+            "phrases": guide_steps(lesson) + payload_phrases(live)}
+
+
+def guide_steps(lesson) -> list[str]:
+    return lesson.script() + [f"{q} — {a}" for q, a in lesson.quiz]
 
 
 @st.cache_data(show_spinner=False, max_entries=48)
@@ -176,7 +215,62 @@ def graph_bundle(formula: str, rng: tuple, title: str, lang: str, spec_d: dict, 
             "live_url": live_url, "live_qr": qr_png(live_url),
             "mat_pdf": mat_pdf(res.layout, title or f"y = {formula}", live_url, lang),
             "mat_svg": mat_svg(res.layout, spec, include_sheet=True), "fits_mat": fits_mat(res.layout),
-            "demo": demo_html(live, to_png(res.layout, spec, style="relief", show_ink=False, pad=0), lang)}
+            "demo": demo_html(live, to_png(res.layout, spec, style="relief", show_ink=False, pad=0), lang),
+            "phrases": guide_steps(lesson) + payload_phrases(live) + graph_point_phrases(live)}
+
+
+@st.cache_data(show_spinner=False, max_entries=48)
+def regions_bundle(djson: str, lang: str, spec_d: dict, price: float, app_url: str) -> dict:
+    spec = spec_from(spec_d)
+    doc = RegionDoc.from_dict(json.loads(djson), lang)
+    res = build_regions(doc, spec, lang)
+    lesson = regions_lesson(res, lang)
+    legend, legend_uni = build_text_legend(res.legend_lines, lang, spec)
+    report = check_layout(res.layout, spec, len(doc.regions), res.layout.warnings + legend.warnings, lang)
+    stl, vol = stl_with_volume(res.layout, spec)
+    stl_leg, vol_leg = stl_with_volume(legend, spec)
+    est = print_estimate(vol + vol_leg, price)
+    title = doc.title or ("Сурет" if lang == "kk" else "Рисунок")
+    url = guide_url(app_url, encode_steps(guide_steps(lesson), lang, title))
+    qr = qr_png(url)
+    pdf = teacher_pdf(title, to_png(res.layout, spec, style="plan"), [""] + res.legend_lines[1:], lesson, report, est,
+                      qr, lang)
+    live = regions_payload(res, lang, title)
+    live_url = touch_url(app_url, live)
+    return {"diagram": res.layout, "legend": legend, "legend_uni": legend_uni, "lesson": lesson, "report": report,
+            "stl": stl, "stl_leg": stl_leg, "est": est, "url": url, "qr": qr, "pdf": pdf, "n": len(doc.regions),
+            "svg": to_svg(res.layout, spec), "svg_leg": to_svg(legend, spec),
+            "svg_teacher": to_svg(res.layout, spec, ink=True), "title": title, "warnings": res.layout.warnings,
+            "live_url": live_url, "live_qr": qr_png(live_url), "mat_pdf": mat_pdf(res.layout, title, live_url, lang),
+            "mat_svg": mat_svg(res.layout, spec, include_sheet=True), "fits_mat": fits_mat(res.layout),
+            "demo": demo_html(live, to_png(res.layout, spec, style="relief", show_ink=False, pad=0), lang),
+            "phrases": guide_steps(lesson) + payload_phrases(live), "kind": doc.kind, "real": bool(doc.width_mm)}
+
+
+def demo_height(layout: Layout) -> int:
+    return int(min(560, layout.width * 3.4) * layout.height / layout.width) + 250
+
+
+def example_json(name: str) -> dict:
+    return json.loads((ROOT / "examples" / name).read_text(encoding="utf-8"))
+
+
+def voice_status(phrases: list[str], lang: str):
+    """Neural voice: phrases are rendered in the background; the chip shows progress."""
+    if not tts.available():
+        return
+    ready, total = tts.ensure(phrases, lang)
+
+    def chip():
+        r, t = tts.status(phrases, lang)
+        done = r >= t
+        label = ("Живой голос готов" if done else f"Готовлю живой голос: {r} из {t}") if lang == "ru" else \
+                ("Тірі дауыс дайын" if done else f"Тірі дауыс дайындалуда: {r} / {t}")
+        st.markdown(f'<div class="ts-voice{" ready" if done else ""}"><i></i>{label}'
+                    f'<span class="bar"><b style="width:{100 * r / max(t, 1):.0f}%"></b></span></div>',
+                    unsafe_allow_html=True)
+
+    st.fragment(chip, run_every=None if ready >= total else 2.5)()
 
 
 def _legend_from_lines(lines: list[str], lang: str, spec: Spec) -> Layout:
@@ -220,6 +314,13 @@ def render_guide(param: str):
         st.stop()
     lang = d["lang"]
     spec_d = asdict(Spec())
+    if d["kind"] == "steps":
+        title = d["title"] or ("Сурет" if lang == "kk" else "Рисунок")
+        st.markdown(f'<div class="ts-word" style="font-size:22px;margin-bottom:6px">TouchSTEM</div>'
+                    f'<h2 style="margin:0 0 8px">{html.escape(title)}</h2>', unsafe_allow_html=True)
+        tts.ensure(d["steps"], lang)
+        st.iframe(guide_html(d["steps"], lang, title), height=640)
+        return
     if d["kind"] == "graph":
         x0, x1, y0, y1 = d["range"]
         res = build_graph(d["formula"], (x0, x1), (y0, y1), lang)
@@ -231,8 +332,9 @@ def render_guide(param: str):
         title = c.title or ("Электр тізбегі" if lang == "kk" else "Электрическая схема")
     st.markdown(f'<div class="ts-word" style="font-size:22px;margin-bottom:6px">TouchSTEM</div>'
                 f'<h2 style="margin:0 0 8px">{html.escape(title)}</h2>', unsafe_allow_html=True)
-    steps = lesson.script() + [f"{q} — {a}" for q, a in lesson.quiz]
-    components.html(guide_html(steps, lang, title), height=640, scrolling=False)
+    steps = guide_steps(lesson)
+    tts.ensure(steps, lang)
+    st.iframe(guide_html(steps, lang, title), height=640)
     _ = spec_d
 
 
@@ -263,13 +365,14 @@ with st.sidebar:
 spec_d = asdict(Spec(grid=float(grid), max_width=float(max_w), max_height=float(max_h),
                      plate_t=float(plate_t), line_h=float(line_h)))
 
-for k, v in {"circuit_json": None, "t0": None, "done_at": None,
+for k, v in {"circuit_json": None, "regions_json": None, "t0": None, "done_at": None,
              "graph": {"formula": "x^2 - 4", "x0": -4.0, "x1": 4.0, "y0": -5.0, "y1": 6.0, "title": ""}}.items():
     st.session_state.setdefault(k, v)
 
 header()
-mode = st.segmented_control("Что превращаем в тактильный лист", ["Электрическая схема", "График функции"],
-                            default="Электрическая схема", label_visibility="collapsed") or "Электрическая схема"
+mode = st.segmented_control("Что превращаем в тактильный лист", list(MODES), format_func=MODES.get,
+                            default="circuit", key="mode", label_visibility="collapsed") or "circuit"
+st.markdown(f'<p class="ts-modenote">{MODE_NOTE[mode]}</p>', unsafe_allow_html=True)
 
 
 def start_timer():
@@ -282,9 +385,29 @@ def mark_done():
         st.session_state.done_at = time.time()
 
 
+def hero(example: str, kind: str):
+    """Empty screen: the product itself, live. Click the sheet and it talks."""
+    if kind == "circuit":
+        c = Circuit.from_dict(example_json(example))
+        b = circuit_bundle(json.dumps(c.to_dict(), ensure_ascii=False, sort_keys=True), lang, spec_d, float(price), APP_URL)
+        head, note = "Нажмите на лампу и подержите", ("Это живой лист: нажмите элемент — он назовёт себя, ещё раз — "
+                                                     "покажет ток и напряжение. Нажмите ключ трижды, и лампы погаснут.")
+    else:
+        b = regions_bundle(json.dumps(example_json(example), ensure_ascii=False, sort_keys=True), lang, spec_d,
+                           float(price), APP_URL)
+        head, note = "Найдите библиотеку на ощупь", ("Выберите цель в игре «Найди» и ведите мышью по плану: голос "
+                                                    "подскажет «правее», «ниже», пока вы не дойдёте. Так ученик учит "
+                                                    "дорогу по школе до первого дня занятий.")
+    st.markdown(f'<p class="ts-hero-k">Попробуйте прямо здесь</p><h3 style="margin-top:0">{head}</h3>',
+                unsafe_allow_html=True)
+    voice_status(b["phrases"], lang)
+    st.iframe(b["demo"], height=demo_height(b["diagram"]))
+    st.markdown(f'<p class="ts-meta">{note}</p>', unsafe_allow_html=True)
+
+
 # ------------------------------------------------------------------ circuit input
 bundle = None
-if mode == "Электрическая схема":
+if mode == "circuit":
     left, right = st.columns([5, 7], gap="large")
     with left:
         st.markdown("### 1. Схема из учебника")
@@ -363,11 +486,84 @@ if mode == "Электрическая схема":
                         unsafe_allow_html=True)
     if bundle is None:
         with right:
-            st.markdown("### Так выглядит готовый лист")
-            st.image(sample_sheet(lang, spec_d), width="stretch")
-            st.markdown('<p class="ts-meta">Параллельное соединение ламп: рельефные линии, номера элементов шрифтом '
-                        'Брайля, срезанный угол для ориентации. Откройте пример слева — появятся урок, аудиогид и файлы для печати.</p>',
+            hero("parallel.json", "circuit")
+
+# ------------------------------------------------------------------ regions input
+elif mode == "regions":
+    left, right = st.columns([5, 7], gap="large")
+    with left:
+        st.markdown("### 1. Картинка")
+        rphoto = st.file_uploader("Фото плана, карты, рисунка или панели прибора", type=["png", "jpg", "jpeg", "webp"],
+                                  key="rphoto", label_visibility="collapsed")
+        if rphoto is not None:
+            st.image(rphoto, width=320)
+            if st.button("Разобрать картинку", type="primary", width="stretch"):
+                start_timer()
+                with st.spinner("Нахожу части…"):
+                    try:
+                        st.session_state.regions_json = parse_regions_image(
+                            rphoto.getvalue(), rphoto.type or "image/jpeg", api_key, model, lang)
+                    except AIError as exc:
+                        st.error(f"{exc}. Проверьте ключ в настройках или выберите пример ниже.")
+        rpick = st.pills("Или откройте пример", list(REGION_EXAMPLES), selection_mode="single", key="r_pick")
+        if rpick and st.session_state.get("r_loaded") != rpick:
+            st.session_state.regions_json = example_json(REGION_EXAMPLES[rpick])
+            st.session_state.r_loaded = rpick
+            start_timer()
+        raw = st.session_state.regions_json
+        if raw is not None:
+            from touchstem.regions import _localize
+            try:
+                doc = RegionDoc.from_dict(raw, lang)
+            except (RegionError, TypeError, ValueError) as exc:
+                st.error(f"Картинку не удалось разобрать: {exc}. Исправьте JSON ниже или загрузите другое фото.")
+                doc = None
+            if doc:
+                st.markdown("### 2. Проверьте подписи")
+                if doc.notes:
+                    st.info(doc.notes)
+                rows = [{"№": r.braille or r.key, "id": r.id, "название": r.label, "описание": r.description}
+                        for r in sorted(doc.regions, key=lambda r: r.key)]
+                edited = st.data_editor(rows, hide_index=True, width="stretch", disabled=["№", "id"], key="r_editor",
+                                        column_config={"id": None,
+                                                       "описание": st.column_config.TextColumn(width="large")})
+                loc = _localize(raw, lang)
+                by_id = {str(r.get("id", f"r{i + 1}")): r for i, r in enumerate(loc.get("regions", []))}
+                changed = False
+                for row in edited:
+                    r = by_id.get(row["id"])
+                    if r is not None and (r.get("label") != row["название"] or (r.get("description") or "") != (row["описание"] or "")):
+                        r["label"], r["description"], changed = row["название"] or r.get("label"), row["описание"] or "", True
+                if doc.kind == "panel" or doc.width_mm:
+                    real = st.number_input("Реальная ширина панели, мм — лист напечатается в натуральную величину и ляжет "
+                                           "поверх кнопок", 0.0, 260.0, float(doc.width_mm or 0.0), 1.0)
+                    if (real or None) != (doc.width_mm or None):
+                        loc["width_mm"] = real or None
+                        changed = True
+                if changed:
+                    st.session_state.regions_json = loc
+                    st.rerun()
+                st.caption("Описание звучит при втором касании. Третье касание называет соседей — их TouchSTEM находит сам.")
+            with st.expander("JSON картинки"):
+                txt = st.text_area("JSON", json.dumps(raw, ensure_ascii=False, indent=1), height=220,
+                                   label_visibility="collapsed", key="r_txt")
+                if st.button("Применить JSON", key="r_apply"):
+                    try:
+                        st.session_state.regions_json = json.loads(txt)
+                        st.rerun()
+                    except json.JSONDecodeError as exc:
+                        st.error(f"В JSON ошибка: {exc}")
+            if doc:
+                with st.spinner("Собираю лист…"):
+                    bundle = regions_bundle(json.dumps(raw, ensure_ascii=False, sort_keys=True), lang, spec_d,
+                                            float(price), APP_URL)
+        else:
+            st.markdown('<p class="ts-meta">Подходит всё, что состоит из частей: план эвакуации, карта Казахстана, '
+                        'строение клетки или сердца, солнечная система, панель стиральной машины.</p>',
                         unsafe_allow_html=True)
+    if bundle is None:
+        with right:
+            hero("school_floor.json", "regions")
 
 # ------------------------------------------------------------------ graph input
 else:
@@ -412,14 +608,14 @@ else:
 # ------------------------------------------------------------------ sheet + tabs
 if bundle:
     with right:
-        st.markdown("### 3. Тактильный лист" if mode == "Электрическая схема" else "### 2. Тактильный лист")
+        st.markdown("### 2. Тактильный лист" if mode == "graph" else "### 3. Тактильный лист")
         v1, v2 = st.columns([3, 2])
         style = v1.segmented_control("Вид", ["Рельеф", "Чертёж"], default="Рельеф",
                                      label_visibility="collapsed") or "Рельеф"
         ink = v2.toggle("Подсказки учителя", value=True)
         key = hashlib.md5(bundle["svg"].encode()).hexdigest()
         img = preview("d", key + lang, "relief" if style == "Рельеф" else "plan", ink, bundle["diagram"], spec_d)
-        st.image(img, width="stretch")
+        st.image(img, width=int(min(640, bundle["diagram"].width * 3.6)) if bundle["diagram"].width < 170 else "stretch")
         rep = bundle["report"]
         tone = "#1E7F4F" if rep.score >= 85 else "#B7791F" if rep.score >= 65 else "#B42318"
         st.markdown(f'<div class="ts-score"><b style="color:{tone}">{rep.score}</b>'
@@ -431,9 +627,10 @@ if bundle:
         t_live, t_lesson, t_audio, t_check, t_files = st.tabs(["Живой лист", "Урок", "Аудиогид", "Проверка", "Файлы"])
         lesson = bundle["lesson"]
         with t_live:
+            voice_status(bundle["phrases"], lang)
             st.markdown("Пластина отвечает на касание. Телефон смотрит на лист сверху, видит наклейку на ногте ученика "
                         "и говорит, что под пальцем. Координаты всех элементов TouchSTEM знает сам — ничего размечать не нужно.")
-            components.html(bundle["demo"], height=int(560 * bundle["diagram"].height / bundle["diagram"].width) + 190)
+            st.iframe(bundle["demo"], height=demo_height(bundle["diagram"]))
             st.markdown("### Как запустить в классе")
             st.markdown('<ol class="ts-steps">'
                         '<li>Распечатайте подложку с метками на обычном принтере (A4).</li>'
@@ -469,15 +666,14 @@ if bundle:
         with t_audio:
             a, b = st.columns([7, 4], gap="large")
             with a:
-                steps = lesson.script() + [f"{q} — {ans}" for q, ans in lesson.quiz]
-                components.html(guide_html(steps, lang, bundle["title"]), height=560)
+                st.iframe(guide_html(guide_steps(lesson), lang, bundle["title"]), height=560)
             with b:
                 st.image(bundle["qr"], width=220)
                 st.write("Ученик наводит камеру телефона на QR-код — открывается этот аудиогид. "
                          "QR уже есть на листе учителя (PDF).")
                 st.link_button("Открыть как ученик", bundle["url"])
-                st.caption("Голос — встроенный в телефон. Если казахского голоса нет, текст читает русский голос, "
-                           "а TalkBack или VoiceOver прочитают текст на экране.")
+                st.caption("Голос — нейросетевой, русский и казахский, создаётся на сервере TouchSTEM. Пока фраза "
+                           "готовится, её читает голос телефона.")
         with t_check:
             rep = bundle["report"]
             icon = {"ok": "✓", "warn": "!", "fail": "×"}

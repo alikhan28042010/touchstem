@@ -28,6 +28,8 @@
   button:focus-visible { outline: 4px solid var(--blue); outline-offset: 3px; }
   .swatches { display: flex; gap: 10px; margin: 12px 0; align-items: center; flex-wrap: wrap; font-size: 15px; }
   .sw { width: 40px; height: 40px; min-height: 0; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 0 0 2px var(--line); }
+  .game { margin: 14px 0 4px; display: grid; gap: 8px; font-size: 16px; font-weight: 600; }
+  .game select { font: inherit; font-size: 18px; min-height: 52px; border-radius: 14px; border: 2px solid var(--line); padding: 0 12px; background: #fff; }
   details { margin-top: 16px; font-size: 15px; line-height: 1.5; color: #3b4148; }
   .err { color: #b42318; }
 </style>
@@ -44,6 +46,11 @@
     <button id="pick">Цвет наклейки</button>
     <button id="reset">Сбросить ключи</button>
     <button id="repeat">Повторить</button>
+  </div>
+  <div class="game" id="game" hidden>
+    <label for="target" id="gameLbl">Игра «Найди»</label>
+    <select id="target"></select>
+    <div class="row"><button class="primary" id="go">Загадать</button><button id="rand">Случайно</button></div>
   </div>
   <div class="swatches">Наклейка:
     <button class="sw" data-p="green" style="background:#39d353" aria-label="зелёная"></button>
@@ -75,6 +82,7 @@
   let cfg;
   try { cfg = await TS.decode(m[1]); } catch (e) { sayBox.innerHTML = '<span class="err">Ссылка повреждена.</span>'; return; }
   TS.setLang(cfg.l);
+  TS.ttsBase = new URL('tts/', location.href).href;
   document.documentElement.lang = cfg.l;
   if (cfg.t) $('title').textContent = cfg.t;
   const engine = new TS.Engine(cfg);
@@ -98,6 +106,15 @@
   document.querySelectorAll('.sw').forEach(b => b.onclick = () => { const p = TS.PRESETS[b.dataset.p]; tracker.setHue(p[0], p[1]); sayBox.textContent = 'Цвет наклейки выбран.'; });
   $('reset').onclick = () => { engine.state = cfg.st || 0; TS.say(cfg.l === 'kk' ? 'Кілттер бастапқы күйде' : 'Ключи в исходном положении'); };
   $('repeat').onclick = () => TS.say(last);
+  if (cfg.k !== 'c') $('reset').hidden = true;
+  const targets = engine.targets();
+  if (targets.length) {
+    $('game').hidden = false;
+    if (cfg.l === 'kk') { $('gameLbl').textContent = '«Тап» ойыны'; $('go').textContent = 'Тапсырма беру'; $('rand').textContent = 'Кездейсоқ'; }
+    targets.forEach((t, i) => { const o = document.createElement('option'); o.value = i; o.textContent = t[0]; $('target').appendChild(o); });
+    $('go').onclick = () => engine.find(+$('target').value);
+    $('rand').onclick = () => { const i = Math.floor(Math.random() * targets.length); $('target').value = i; engine.find(i); };
+  }
 })();
 </script>
 </body>

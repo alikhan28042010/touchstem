@@ -181,6 +181,10 @@ def build_diagram(c: Circuit, spec: Spec | None = None, lang: str = "ru") -> Lay
 
 # ---------------------------------------------------------------- legend
 def build_legend(c: Circuit, lang: str = "ru", spec: Spec | None = None) -> tuple[Layout, str]:
+    return build_text_legend([LEGEND_TITLE[lang]] + [f"{key} {text}" for key, text in c.legend(lang)], lang, spec)
+
+
+def build_text_legend(texts: list[str], lang: str = "ru", spec: Spec | None = None) -> tuple[Layout, str]:
     spec = spec or Spec()
     max_cells = int((spec.max_width - 2 * spec.margin) // spec.cell_pitch)
     lines: list[tuple[list[str], str]] = []
@@ -197,9 +201,8 @@ def build_legend(c: Circuit, lang: str = "ru", spec: Spec | None = None) -> tupl
             cells = cells[cut + 1:] if cut < len(cells) and cells[cut] == "0" else cells[cut:]
         lines.append((cells, text))
 
-    add(LEGEND_TITLE[lang])
-    for key, text in c.legend(lang):
-        add(f"{key} {text}")
+    for text in texts:
+        add(text)
     longest = max((len(cl) for cl, _ in lines), default=1)
     W = max(cells_size(longest, spec)[0] + 2 * spec.margin, 80)
     H = len(lines) * spec.line_pitch + 2 * spec.margin

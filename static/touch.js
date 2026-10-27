@@ -25,25 +25,53 @@
 
   // ---------------------------------------------------------------- speech + tone
   global.__spoken = global.__spoken || [];
-  let lang = 'ru-RU';
-  TS.setLang = (l) => { lang = l === 'kk' ? 'kk-KZ' : 'ru-RU'; };
+  let lang = 'ru-RU', short = 'ru';
+  TS.ttsBase = null;                      // folder with neural-voice MP3s (static/tts/), set by the page
+  TS.setLang = (l) => { short = l === 'kk' ? 'kk' : 'ru'; lang = short === 'kk' ? 'kk-KZ' : 'ru-RU'; };
+  const NICE = /natural|online|neural|enhanced|premium|wavenet|google/i;
   function voice() {
     if (!('speechSynthesis' in global)) return null;
     const vs = speechSynthesis.getVoices();
-    return vs.find(v => (v.lang || '').toLowerCase().startsWith(lang.slice(0, 2))) ||
-           (lang.startsWith('kk') ? vs.find(v => (v.lang || '').toLowerCase().startsWith('ru')) : null);
+    const pick = code => {
+      const m = vs.filter(v => (v.lang || '').toLowerCase().startsWith(code));
+      return m.find(v => NICE.test(v.name)) || m[0];
+    };
+    return pick(short) || (short === 'kk' ? pick('ru') : null);
   }
-  TS.say = function (text) {
-    if (!text) return;
-    global.__spoken.push(text);
-    if (TS.onSay) TS.onSay(text);
-    if (!('speechSynthesis' in global) || global.__TS_TEST) return;
-    speechSynthesis.cancel();
+  async function keyOf(text) {
+    const b = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(short + '|' + text));
+    return Array.from(new Uint8Array(b)).map(x => x.toString(16).padStart(2, '0')).join('').slice(0, 20);
+  }
+  let player = null, sayId = 0;
+  function browserSay(text) {
+    if (!('speechSynthesis' in global)) return;
     const u = new SpeechSynthesisUtterance(text);
     const v = voice();
     if (v) { u.voice = v; u.lang = v.lang; } else u.lang = lang;
-    u.rate = 0.95;
+    u.rate = 0.95; u.pitch = 1.0;
     speechSynthesis.speak(u);
+  }
+  TS.say = async function (text) {
+    if (!text) return;
+    global.__spoken.push(text);
+    if (TS.onSay) TS.onSay(text);
+    if (global.__TS_TEST && !global.__TS_AUDIO_TEST) return;
+    const id = ++sayId;
+    if (player) { player.pause(); player = null; }
+    if ('speechSynthesis' in global) speechSynthesis.cancel();
+    if (TS.ttsBase && global.crypto && crypto.subtle) {
+      try {
+        const k = await keyOf(text);
+        if (id !== sayId) return;
+        const a = new Audio(TS.ttsBase + k + '.mp3');
+        player = a;
+        await a.play();
+        global.__audioPlayed = (global.__audioPlayed || 0) + 1;
+        return;
+      } catch (e) { if (id !== sayId) return; }
+    }
+    if (global.__TS_TEST) return;
+    browserSay(text);
   };
   let audio = null, osc = null, gain = null;
   TS.tone = function (freq) {
@@ -56,6 +84,19 @@
       }
       if (freq) { osc.frequency.setTargetAtTime(freq, audio.currentTime, 0.03); gain.gain.setTargetAtTime(0.08, audio.currentTime, 0.03); }
       else gain.gain.setTargetAtTime(0, audio.currentTime, 0.05);
+    } catch (e) { /* audio not available */ }
+  };
+
+  TS.chime = function () {
+    if (global.__TS_TEST) { global.__chimes = (global.__chimes || 0) + 1; return; }
+    try {
+      if (!audio) TS.tone(0);
+      [523.25, 659.25, 783.99].forEach((f, i) => {
+        const o = audio.createOscillator(), g = audio.createGain(), t0 = audio.currentTime + i * 0.11;
+        o.type = 'triangle'; o.frequency.value = f; g.gain.setValueAtTime(0, t0);
+        g.gain.linearRampToValueAtTime(0.12, t0 + 0.02); g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.5);
+        o.connect(g).connect(audio.destination); o.start(t0); o.stop(t0 + 0.55);
+      });
     } catch (e) { /* audio not available */ }
   };
 
@@ -109,7 +150,59 @@
       if (Math.abs(x - X(g.axX)) < 3) return 'ay';
       return null;
     }
-    hit(x, y) { return this.cfg.k === 'g' ? this.hitGraph(x, y) : this.hitCircuit(x, y); }
+    // region hotspots: the smallest polygon that contains the finger
+    hitRegion(x, y) {
+      let best = null, bestA = 1e12;
+      this.cfg.hs.forEach((h, i) => {
+        const p = h[0];
+        let inside = false;
+        for (let a = 0, b = p.length - 2; a < p.length; b = a, a += 2) {
+          const xa = p[a], ya = p[a + 1], xb = p[b], yb = p[b + 1];
+          if ((ya > y) !== (yb > y) && x < (xb - xa) * (y - ya) / (yb - ya) + xa) inside = !inside;
+        }
+        if (inside && h[4] < bestA) { best = i; bestA = h[4]; }
+      });
+      return best === null ? null : 'h' + best;
+    }
+    hit(x, y) {
+      if (this.cfg.k === 'g') return this.hitGraph(x, y);
+      return this.cfg.k === 'r' ? this.hitRegion(x, y) : this.hitCircuit(x, y);
+    }
+    // things a learner can be asked to find: [name, x, y, hotspot id]
+    targets() {
+      if (this.cfg.k === 'r') return this.cfg.hs.map((h, i) => [h[1], h[5], h[6], 'h' + i]);
+      if (this.cfg.k === 'c') return this.cfg.hs.map((h, i) => [h[5], h[0], h[1], 'h' + i]).filter(t => t[3] && this.cfg.hs[+t[3].slice(1)][6].length);
+      return [];
+    }
+    find(i) {
+      const t = this.targets()[i];
+      if (!t) { this.target = null; return; }
+      this.target = t; this.lastHint = 0; this.onTargetSince = 0;
+      TS.say(this.cfg.fx.find.replace('{name}', t[0]));
+    }
+    direction(pt) {
+      const fx = this.cfg.fx, t = this.target, dx = t[1] - pt.x, dy = t[2] - pt.y, parts = [];
+      if (Math.abs(dx) > 6 && Math.abs(dx) >= Math.abs(dy) * 0.4) parts.push(dx > 0 ? fx.right : fx.left);
+      if (Math.abs(dy) > 6 && Math.abs(dy) >= Math.abs(dx) * 0.4) parts.push(dy > 0 ? fx.down : fx.up);
+      return parts.join(fx.and) || fx.close;
+    }
+    findStep(pt, h, now) {
+      const t = this.target;
+      const dist = Math.hypot(t[1] - pt.x, t[2] - pt.y);
+      TS.tone(0);
+      if (h === t[3]) {
+        if (!this.onTargetSince) this.onTargetSince = now;
+        if (now - this.onTargetSince > 300) {
+          this.target = null; this.cur = h; this.level = 1; this.enterT = now;
+          TS.chime(); TS.say(this.cfg.fx.found.replace('{name}', t[0]));
+          if (this.onFound) this.onFound(t);
+        }
+        return;
+      }
+      this.onTargetSince = 0;
+      if (now - this.lastHint > 1700) { this.lastHint = now; TS.say(this.direction(pt)); }
+      if (this.onHint) this.onHint(dist);
+    }
 
     update(pt, now) {
       now = now === undefined ? performance.now() : now;
@@ -119,6 +212,7 @@
         return;
       }
       const h = this.hit(pt.x, pt.y);
+      if (this.target) return this.findStep(pt, h, now);
       if (this.cfg.k === 'g') this.graphTone(pt, h);
       if (h !== this.cur) {
         this.cur = h; this.level = 0; this.enterT = now; this.lostAt = 0;
@@ -142,6 +236,12 @@
     speak(h, level) {
       if (this.onChange) this.onChange(h, level);
       if (this.cfg.k === 'g') return this.speakGraph(h, level);
+      if (this.cfg.k === 'r') {
+        const r = this.cfg.hs[+h.slice(1)];
+        const text = [r[1], r[2], r[3]][level - 1];
+        if (text) return TS.say(text);
+        this.level = 1; return TS.say(r[1]);
+      }
       const i = +h.slice(1), hs = this.cfg.hs[i];
       const l2 = hs[6].length ? hs[6][this.state] : '', l3 = hs[7].length ? hs[7][this.state] : '';
       const sw = this.cfg.sw.indexOf(i);
@@ -332,7 +432,7 @@
     let timer = null;
     const tick = () => { if (down && down.pt) engine.update(down.pt, performance.now()); };
     el.addEventListener('pointerdown', e => { e.preventDefault(); el.setPointerCapture(e.pointerId); down = { pt: toPlate(e) }; engine.update(down.pt, performance.now()); timer = setInterval(tick, 60); });
-    el.addEventListener('pointermove', e => { if (down) { down.pt = toPlate(e); engine.update(down.pt, performance.now()); } });
+    el.addEventListener('pointermove', e => { if (down) { down.pt = toPlate(e); engine.update(down.pt, performance.now()); } else if (engine.target) engine.update(toPlate(e), performance.now()); });
     const up = () => { if (!down) return; down = false; clearInterval(timer); engine.update(null, performance.now()); };
     el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
   };

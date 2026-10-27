@@ -76,6 +76,8 @@ TX = {
         "g_point": "икс {x}, игрек {y}", "g_zero": "здесь график пересекает горизонтальную ось",
         "g_min": "самая низкая точка", "g_max": "самая высокая точка", "g_axis_x": "горизонтальная ось",
         "g_axis_y": "вертикальная ось", "g_origin": "начало координат",
+        "f_find": "Найдите: {name}. Ведите пальцем по листу, я подскажу направление.", "f_found": "Нашли! {name}.",
+        "f_right": "правее", "f_left": "левее", "f_up": "выше", "f_down": "ниже", "f_and": " и ", "f_close": "совсем рядом",
     },
     "kk": {
         "l1": "{k} нөмір, {name}", "junction": "тармақталу нүктесі, мұнда сым бөлінеді",
@@ -93,6 +95,9 @@ TX = {
         "g_point": "икс {x}, игрек {y}", "g_zero": "мұнда график көлденең осьті қиып өтеді",
         "g_min": "ең төменгі нүкте", "g_max": "ең жоғарғы нүкте", "g_axis_x": "көлденең ось",
         "g_axis_y": "тік ось", "g_origin": "координаталар басы",
+        "f_find": "Табыңыз: {name}. Саусақпен парақ бойымен жүргізіңіз, бағытын айтып отырамын.", "f_found": "Таптыңыз! {name}.",
+        "f_right": "оңға қарай", "f_left": "солға қарай", "f_up": "жоғары", "f_down": "төмен", "f_and": " және ",
+        "f_close": "өте жақын",
     },
 }
 
@@ -199,7 +204,62 @@ def circuit_payload(c: Circuit, layout: Layout, lang: str = "ru") -> dict:
     ox, oy = plate_offset(layout)
     return {"v": 1, "k": "c", "l": lang, "t": c.title, "mat": [MAT_W, MAT_H], "mk": marker_layout(),
             "off": [round(ox, 1), round(oy, 1)], "pw": round(layout.width, 1), "ph": round(layout.height, 1),
-            "hs": hs, "sw": sw_index, "st": init, "tg": toggles}
+            "hs": hs, "sw": sw_index, "st": init, "tg": toggles, "fx": find_texts(lang)}
+
+
+def find_texts(lang: str) -> dict:
+    t = TX[lang]
+    return {k[2:]: v for k, v in t.items() if k.startswith("f_")}
+
+
+def find_phrases(payload: dict) -> list[str]:
+    """Every sentence the find game can say (pre-rendered by the neural voice)."""
+    fx = payload.get("fx")
+    if not fx:
+        return []
+    if payload["k"] == "r":
+        names = [h[1] for h in payload["hs"]]
+    else:
+        names = [h[5] for h in payload["hs"] if h[6]]
+    out = [fx["find"].format(name=n) for n in names] + [fx["found"].format(name=n) for n in names]
+    out += [fx["close"]]
+    for a in ("right", "left", ""):
+        for b in ("up", "down", ""):
+            parts = [fx[x] for x in (a, b) if x]
+            if parts:
+                out.append(fx["and"].join(parts))
+    return out
+
+
+def payload_phrases(payload: dict) -> list[str]:
+    """All fixed sentences of a living sheet (graph point readings are added by the caller)."""
+    out = []
+    if payload["k"] == "c":
+        for h in payload["hs"]:
+            out.append(h[5])
+            out += [x for x in h[6] + h[7] if x]
+        for row in payload["tg"]:
+            out += row
+    elif payload["k"] == "r":
+        for h in payload["hs"]:
+            out += [x for x in h[1:4] if x]
+    else:
+        out += list(payload["tx"].values())
+    return out + find_phrases(payload)
+
+
+def regions_payload(res, lang: str = "ru", title: str = "") -> dict:
+    """res: regions.RegionsResult."""
+    from shapely.geometry import Polygon as _P
+    ox, oy = plate_offset(res.layout)
+    hs = []
+    for h in res.hotspots:
+        c = _P(h["poly"]).centroid
+        hs.append([[v for xy in h["poly"] for v in xy], h["label"], h["l2"], h["l3"], h["area"], round(c.x, 1),
+                   round(c.y, 1)])
+    return {"v": 1, "k": "r", "l": lang, "t": title, "mat": [MAT_W, MAT_H], "mk": marker_layout(),
+            "off": [round(ox, 1), round(oy, 1)], "pw": round(res.layout.width, 1), "ph": round(res.layout.height, 1),
+            "hs": hs, "fx": find_texts(lang)}
 
 
 def graph_payload(res, lang: str = "ru", title: str = "") -> dict:
@@ -322,3 +382,36 @@ def mat_pdf(layout: Layout, title: str, url: str, lang: str = "ru") -> bytes:
     fig.savefig(buf, format="pdf")
     plt.close(fig)
     return buf.getvalue()
+
+
+def _js_num(v: float) -> str:
+    """Same text as num() in touch.js."""
+    if abs(v - round(v)) < 1e-6:
+        return str(int(round(v))) if round(v) != 0 else "0"
+    s = f"{v:.2f}".rstrip("0")
+    return s.replace(".", ",")
+
+
+def graph_point_phrases(payload: dict) -> list[str]:
+    """Readings the graph engine can speak while the finger slides along the curve."""
+    import math
+    g, cv, t = payload["gx"], payload["cv"], payload["tx"]
+    x0, x1 = g[3], g[4]
+    n = len(cv) - 1
+
+    def curve(xv):
+        tt = (xv - x0) / (x1 - x0) * n
+        i = math.floor(tt)
+        if i < 0 or i >= n or cv[i] is None or cv[i + 1] is None:
+            return None
+        return cv[i] + (cv[i + 1] - cv[i]) * (tt - i)
+
+    step = 0.5 if (x1 - x0) <= 8 else 1
+    xs = [k * step for k in range(math.ceil(x0 / step - 0.3 / step), math.floor(x1 / step + 0.3 / step) + 1)]
+    xs += payload["zs"] + [m[0] for m in payload["mn"] + payload["mx"]]
+    out = []
+    for xv in xs:
+        yv = curve(xv)
+        if yv is not None:
+            out.append(t["g_point"].replace("{x}", _js_num(xv)).replace("{y}", _js_num(math.floor(yv * 100 + 0.5) / 100)))
+    return out

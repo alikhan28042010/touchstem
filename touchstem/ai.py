@@ -106,3 +106,55 @@ def parse_graph_image(image_bytes: bytes, mime_type: str, api_key: str, model: s
     except Exception as exc:
         raise AIError(f"ошибка запроса к Gemini: {exc}") from exc
     return _extract_json(resp.text or "")
+
+
+REGIONS_PROMPT = """You turn a picture into a tactile sheet for a blind student. The picture may be a floor plan,
+an evacuation plan, a map, a biology/anatomy/physics/geography diagram, or a photo of an appliance control
+panel (microwave, washing machine, elevator, remote).
+Write all labels and descriptions in {lang_name}.
+Return ONLY JSON:
+{{
+  "title": "short title",
+  "kind": "map" | "diagram" | "panel" | "other",
+  "aspect": <width / height of the useful part of the picture>,
+  "regions": [{{"id": "r1", "label": "1-4 words", "description": "one or two short helpful sentences",
+                "style": "room" | "path" | "object" | "button" | "area",
+                "polygon": [[x, y], ...]  OR  "box": [x0, y0, x1, y1]  OR  "ellipse": [cx, cy, rx, ry]}}],
+  "points": [{{"label": "", "kind": "entrance" | "stairs" | "you" | "other", "x": 0, "y": 0}}],
+  "doors": [[x, y], ...],
+  "notes": "anything unclear, in Russian; empty if all clear"
+}}
+Rules:
+1. Coordinates are integers 0..1000: x across the width, y down the height of the useful part (crop margins).
+2. 3 to 14 regions. Only parts that matter for understanding; merge tiny details. No overlapping siblings;
+   a part inside another part (organelle inside a cell) is fine.
+3. Polygons: at most 16 vertices, simplified outline. Prefer box for rectangular rooms and buttons.
+4. "path" = corridor or walkable area, "room" = room, "button" = control a finger presses,
+   "object" = a distinct part of a diagram, "area" = a large container or zone.
+5. For panels: one region per button or knob, plus the display as "area". A panel sheet will be printed at
+   real size and laid over the device, so keep geometry accurate.
+6. For floor plans put door positions in "doors" (points on walls) and entrances/stairs in "points".
+7. Descriptions explain what it is or what it does, never how it looks in colour.
+8. Do not invent parts that are not in the picture."""
+
+
+def parse_regions_image(image_bytes: bytes, mime_type: str, api_key: str, model: str = DEFAULT_MODEL,
+                        lang: str = "ru") -> dict:
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError as exc:  # pragma: no cover
+        raise AIError("не установлен пакет google-genai") from exc
+    if not api_key:
+        raise AIError("нет GEMINI_API_KEY")
+    client = genai.Client(api_key=api_key)
+    prompt = REGIONS_PROMPT.format(lang_name="Kazakh" if lang == "kk" else "Russian")
+    try:
+        resp = client.models.generate_content(
+            model=model,
+            contents=[types.Part.from_bytes(data=image_bytes, mime_type=mime_type), prompt],
+            config=types.GenerateContentConfig(temperature=0, response_mime_type="application/json"),
+        )
+    except Exception as exc:
+        raise AIError(f"ошибка запроса к Gemini: {exc}") from exc
+    return _extract_json(resp.text or "")

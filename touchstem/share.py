@@ -42,10 +42,23 @@ def encode_graph(formula: str, rng: tuple[float, float, float, float], lang: str
     return _pack({"k": "g", "l": lang, "f": formula, "r": list(rng), "t": title})
 
 
+def encode_steps(steps: list[str], lang: str, title: str = "") -> str:
+    """Any sheet whose guide is plain text (maps, plans, diagrams): ship the script itself."""
+    steps = [x[:300] for x in steps][:40]
+    out = _pack({"k": "s", "l": lang, "t": title, "s": steps})
+    while len(out) > MAX_PARAM and len(steps) > 4:
+        steps = steps[:-1]
+        out = _pack({"k": "s", "l": lang, "t": title, "s": steps})
+    return out
+
+
 def decode(s: str) -> dict:
     """Returns {'kind': 'circuit', 'lang', 'circuit': dict} or {'kind': 'graph', 'lang', 'formula', 'range', 'title'}."""
     d = _unpack(s)
     lang = d.get("l", "ru") if d.get("l") in ("ru", "kk") else "ru"
+    if d.get("k") == "s":
+        return {"kind": "steps", "lang": lang, "title": str(d.get("t", ""))[:80],
+                "steps": [str(x)[:300] for x in d.get("s", [])][:40]}
     if d.get("k") == "g":
         r = [float(v) for v in d["r"]][:4]
         return {"kind": "graph", "lang": lang, "formula": str(d["f"])[:120], "range": r, "title": str(d.get("t", ""))}

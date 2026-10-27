@@ -19,14 +19,14 @@ def test_circuit_example_flow():
 
 def test_graph_flow():
     at = _app()
-    at.segmented_control[0].set_value("График функции").run()
+    at.segmented_control[0].set_value("graph").run()
     assert not at.exception, at.exception
     assert any("Тактильный лист" in m.value for m in at.markdown)
 
 
 def test_bad_formula_shows_error():
     at = _app()
-    at.segmented_control[0].set_value("График функции").run()
+    at.segmented_control[0].set_value("graph").run()
     at.text_input[0].set_value("import os").run()
     assert at.error, "expected an error message"
 
@@ -41,3 +41,14 @@ def test_guide_route():
     at.query_params["g"] = encode_circuit(c, "kk")
     at.run()
     assert not at.exception, at.exception
+
+
+def test_regions_example_flow():
+    at = _app()
+    at.segmented_control[0].set_value("regions").run()
+    assert not at.exception, at.exception
+    at.pills[0].set_value("План школы").run()
+    assert not at.exception, at.exception
+    assert any("Тактильный лист" in m.value for m in at.markdown)
+    labels = [b.label for b in at.get("download_button")]
+    assert "Схема, STL" in labels

@@ -18,9 +18,10 @@ UI = {
 }
 
 
-def guide_html(steps: list[str], lang: str = "ru", title: str = "") -> str:
+def guide_html(steps: list[str], lang: str = "ru", title: str = "", tts_base: str = "/app/static/tts/") -> str:
     ui = UI[lang]
-    data = json.dumps({"steps": steps, "ui": ui, "lang": "kk-KZ" if lang == "kk" else "ru-RU"}, ensure_ascii=False)
+    data = json.dumps({"steps": steps, "ui": ui, "lang": "kk-KZ" if lang == "kk" else "ru-RU", "short": lang,
+                       "tts": tts_base}, ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e")
     return f"""<!doctype html><html lang="{lang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
@@ -53,24 +54,44 @@ def guide_html(steps: list[str], lang: str = "ru", title: str = "") -> str:
 const D = {data};
 let i = 0, playingAll = false;
 const say = document.getElementById('say'), count = document.getElementById('count'), note = document.getElementById('note');
+const NICE = /natural|online|neural|enhanced|premium|wavenet|google/i;
 function voice() {{
   const vs = speechSynthesis.getVoices();
-  let v = vs.find(v => v.lang && v.lang.toLowerCase().startsWith(D.lang.slice(0,2)));
-  if (!v && D.lang.startsWith('kk')) {{ v = vs.find(v => v.lang && v.lang.toLowerCase().startsWith('ru')); if (v) note.textContent = D.ui.novoice; }}
+  const pick = c => {{ const m = vs.filter(v => (v.lang || '').toLowerCase().startsWith(c)); return m.find(v => NICE.test(v.name)) || m[0]; }};
+  let v = pick(D.short);
+  if (!v && D.short === 'kk') {{ v = pick('ru'); if (v) note.textContent = D.ui.novoice; }}
   return v;
 }}
 function show() {{
   say.textContent = D.steps[i];
   count.textContent = D.ui.step.replace('{{i}}', i + 1).replace('{{n}}', D.steps.length);
 }}
-function speak(onend) {{
-  if (!('speechSynthesis' in window)) return;
-  speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(D.steps[i]);
+let player = null, sid = 0;
+async function keyOf(t) {{
+  const b = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(D.short + '|' + t));
+  return Array.from(new Uint8Array(b)).map(x => x.toString(16).padStart(2, '0')).join('').slice(0, 20);
+}}
+function browserSpeak(text, onend) {{
+  if (!('speechSynthesis' in window)) {{ if (onend) onend(); return; }}
+  const u = new SpeechSynthesisUtterance(text);
   const v = voice(); if (v) {{ u.voice = v; u.lang = v.lang; }} else {{ u.lang = D.lang; }}
-  u.rate = 0.92;
+  u.rate = 0.95;
   if (onend) u.onend = onend;
   speechSynthesis.speak(u);
+}}
+async function speak(onend) {{
+  const id = ++sid, text = D.steps[i];
+  if (player) {{ player.pause(); player = null; }}
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
+  if (D.tts && window.crypto && crypto.subtle) {{
+    try {{
+      const k = await keyOf(text); if (id !== sid) return;
+      const a = new Audio(D.tts + k + '.mp3'); player = a;
+      if (onend) a.onended = onend;
+      await a.play(); return;
+    }} catch (e) {{ if (id !== sid) return; }}
+  }}
+  browserSpeak(text, onend);
 }}
 function go(d) {{ playingAll = false; i = Math.max(0, Math.min(D.steps.length - 1, i + d)); show(); speak(); }}
 document.getElementById('prev').onclick = () => go(-1);
@@ -78,7 +99,7 @@ document.getElementById('next').onclick = () => go(1);
 document.getElementById('repeat').onclick = () => {{ playingAll = false; speak(); }};
 const allBtn = document.getElementById('all');
 allBtn.onclick = () => {{
-  if (playingAll) {{ playingAll = false; speechSynthesis.cancel(); allBtn.textContent = D.ui.all; return; }}
+  if (playingAll) {{ playingAll = false; if (player) player.pause(); speechSynthesis.cancel(); allBtn.textContent = D.ui.all; return; }}
   playingAll = true; allBtn.textContent = D.ui.stop;
   const step = () => {{ show(); speak(() => {{ if (playingAll && i < D.steps.length - 1) {{ i++; step(); }} else {{ playingAll = false; allBtn.textContent = D.ui.all; }} }}); }};
   step();

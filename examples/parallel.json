@@ -1,0 +1,19 @@
+{
+  "title": "Параллельное соединение ламп с вольтметром",
+  "nodes": [
+    {"id": "a", "x": 0, "y": 0}, {"id": "b", "x": 2, "y": 0}, {"id": "c", "x": 4, "y": 0},
+    {"id": "d", "x": 2, "y": 2}, {"id": "e", "x": 4, "y": 2},
+    {"id": "f", "x": 2, "y": 4}, {"id": "g", "x": 4, "y": 4}, {"id": "h", "x": 0, "y": 4}
+  ],
+  "elements": [
+    {"id": "e1", "type": "battery", "from": "h", "to": "a", "value": "12 В"},
+    {"id": "e2", "type": "switch", "from": "a", "to": "b"},
+    {"id": "e3", "type": "wire", "from": "b", "to": "c"},
+    {"id": "e4", "type": "lamp", "from": "b", "to": "d"},
+    {"id": "e5", "type": "lamp", "from": "c", "to": "e"},
+    {"id": "e6", "type": "wire", "from": "d", "to": "f"},
+    {"id": "e7", "type": "wire", "from": "e", "to": "g"},
+    {"id": "e8", "type": "voltmeter", "from": "f", "to": "g"},
+    {"id": "e9", "type": "wire", "from": "f", "to": "h"}
+  ]
+}

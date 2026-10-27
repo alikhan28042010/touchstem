@@ -1,0 +1,16 @@
+{
+  "title": "Последовательная цепь",
+  "nodes": [
+    {"id": "n1", "x": 0, "y": 0}, {"id": "n2", "x": 2, "y": 0}, {"id": "n3", "x": 4, "y": 0},
+    {"id": "n4", "x": 4, "y": 2}, {"id": "n5", "x": 2, "y": 2}, {"id": "n6", "x": 0, "y": 2}
+  ],
+  "elements": [
+    {"id": "e1", "type": "cell", "from": "n1", "to": "n2", "label": "", "value": "4,5 V"},
+    {"id": "e2", "type": "switch", "from": "n2", "to": "n3", "label": "K"},
+    {"id": "e3", "type": "lamp", "from": "n3", "to": "n4", "label": "L1"},
+    {"id": "e4", "type": "resistor", "from": "n4", "to": "n5", "label": "R1", "value": "10 Ω"},
+    {"id": "e5", "type": "ammeter", "from": "n5", "to": "n6", "label": "A"},
+    {"id": "e6", "type": "wire", "from": "n6", "to": "n1"}
+  ],
+  "notes": ""
+}

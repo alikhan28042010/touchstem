@@ -1,0 +1,32 @@
+[theme]
+base = "light"
+primaryColor = "#14181D"
+backgroundColor = "#FBFBF9"
+secondaryBackgroundColor = "#F1F2EE"
+textColor = "#14181D"
+linkColor = "#2440C8"
+borderColor = "#D9DCD3"
+baseRadius = "10px"
+font = "Plex, sans-serif"
+headingFont = "Plex, sans-serif"
+headingFontWeights = [600, 600, 600, 600, 600, 600]
+
+[[theme.fontFaces]]
+family = "Plex"
+url = "app/static/fonts/IBMPlexSans-sub.woff2"
+weight = "100 700"
+
+[[theme.fontFaces]]
+family = "Unbounded"
+url = "app/static/fonts/Unbounded-latin.woff2"
+weight = "200 900"
+
+[client]
+toolbarMode = "minimal"
+
+[server]
+maxUploadSize = 15
+enableStaticServing = true
+
+[browser]
+gatherUsageStats = false

@@ -27,7 +27,7 @@ class Spec:
     max_height: float = 180.0
     line_w: float = 1.4         # raised line width
     line_h: float = 0.9         # raised line height (STL)
-    plate_t: float = 2.0        # base plate thickness (STL)
+    plate_t: float = 1.6        # base plate thickness (STL)
     dot_d: float = 1.6          # braille dot base diameter
     dot_h: float = 0.7          # braille dot height (STL)
     dot_pitch: float = 2.5      # dot centre spacing inside a cell
@@ -45,6 +45,8 @@ class Layout:
     dots: list[tuple[float, float]] = field(default_factory=list)
     ink: list[tuple[str, float, float, float]] = field(default_factory=list)  # text, x, y, size
     warnings: list[str] = field(default_factory=list)
+    texture: object = field(default_factory=Polygon)   # low relief (grid points etc.), excluded from spacing rules
+    corner: float = 8.0                                  # orientation cut, top-left corner (mm)
 
 
 # ---------------------------------------------------------------- braille cells
@@ -145,7 +147,7 @@ def build_diagram(c: Circuit, spec: Spec | None = None, lang: str = "ru") -> Lay
         for side in (1, -1):
             off = hw + spec.label_gap + (abs(nrm[0]) * w + abs(nrm[1]) * h) / 2 + 1
             candidates.append((mid[0] + side * off * nrm[0], mid[1] + side * off * nrm[1]))
-        for along in (0.25, -0.25):
+        for along in (0.25, -0.25, 0.4, -0.4):
             for side in (1, -1):
                 off = hw + spec.label_gap + (abs(nrm[0]) * w + abs(nrm[1]) * h) / 2 + 1
                 shift = along * grid
@@ -159,8 +161,8 @@ def build_diagram(c: Circuit, spec: Spec | None = None, lang: str = "ru") -> Lay
             if cost == 0:
                 break
         cx, cy, rect = best
-        if best_cost and best_cost > 0.5:
-            warnings.append(f"подпись {e.key} касается линий — проверьте превью")
+        if rect.distance(raised) < 1.5:
+            warnings.append(f"подпись {e.key} слишком близко к линии — проверьте превью")
         dots += place_cells(br.cells, cx - w / 2, cy - h / 2, spec)
         obstacles.append(rect.buffer(spec.label_gap / 2))
         ink.append((str(e.key), cx, cy - h / 2 - 2.5, 3.2))
@@ -203,6 +205,12 @@ def build_legend(c: Circuit, lang: str = "ru", spec: Spec | None = None) -> tupl
     return Layout(W, H, Polygon(), dots, ink, sorted(set(warnings))), unicode_text
 
 
+def polygons(geom) -> list:
+    if geom is None or geom.is_empty:
+        return []
+    return [geom] if geom.geom_type == "Polygon" else [g for g in getattr(geom, "geoms", []) if not g.is_empty]
+
+
 # ---------------------------------------------------------------- export: SVG
 def _poly_paths(geom) -> list[str]:
     polys = [geom] if geom.geom_type == "Polygon" else list(getattr(geom, "geoms", []))
@@ -223,8 +231,12 @@ def to_svg(layout: Layout, spec: Spec | None = None, ink: bool = False) -> str:
     out = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{w:.1f}mm" height="{h:.1f}mm" '
            f'viewBox="0 0 {w:.2f} {h:.2f}">',
            f'<rect width="{w:.2f}" height="{h:.2f}" fill="white"/>']
-    for d in _poly_paths(layout.raised):
-        out.append(f'<path d="{d}" fill="black" fill-rule="evenodd"/>')
+    for geom in (layout.raised, layout.texture):
+        for d in _poly_paths(geom):
+            out.append(f'<path d="{d}" fill="black" fill-rule="evenodd"/>')
+    if layout.corner:
+        k = layout.corner
+        out.append(f'<path d="M 0,{k:.2f} L {k:.2f},0" stroke="#9aa0a6" stroke-width="0.3" stroke-dasharray="1,1"/>')
     r = spec.dot_d / 2
     for x, y in layout.dots:
         out.append(f'<circle cx="{x:.2f}" cy="{y:.2f}" r="{r:.2f}" fill="black"/>')
@@ -237,65 +249,97 @@ def to_svg(layout: Layout, spec: Spec | None = None, ink: bool = False) -> str:
 
 
 # ---------------------------------------------------------------- export: STL
-def to_stl(layout: Layout, spec: Spec | None = None) -> bytes:
-    from manifold3d import CrossSection, Manifold
+def stl_with_volume(layout: Layout, spec: Spec | None = None) -> tuple[bytes, float]:
+    """Watertight STL of plate + raised lines + braille domes; returns (bytes, volume mm^3)."""
+    from manifold3d import CrossSection, Manifold, OpType
     import numpy as np
     import trimesh
 
     spec = spec or Spec()
-    W, H = layout.width, layout.height
-    parts = [Manifold.cube([W, H, spec.plate_t])]
-    polys = [layout.raised] if layout.raised.geom_type == "Polygon" else list(getattr(layout.raised, "geoms", []))
-    for p in polys:
-        if p.is_empty:
-            continue
-        rings = [[(x, H - y) for x, y in p.exterior.coords[:-1]]]
-        rings += [[(x, H - y) for x, y in r.coords[:-1]] for r in p.interiors]
-        cs = CrossSection(rings)
-        parts.append(cs.extrude(spec.line_h).translate([0, 0, spec.plate_t - 0.05]))
+    W, H, k = layout.width, layout.height, layout.corner
+    outline = [(0, 0), (W, 0), (W, H), (k, H), (0, H - k)] if k else [(0, 0), (W, 0), (W, H), (0, H)]
+    parts = [CrossSection([outline]).extrude(spec.plate_t)]
+
+    def extrude(geom, height):
+        for p in polygons(geom):
+            rings = [[(x, H - y) for x, y in p.exterior.coords[:-1]]]
+            rings += [[(x, H - y) for x, y in r.coords[:-1]] for r in p.interiors]
+            parts.append(CrossSection(rings).extrude(height).translate([0, 0, spec.plate_t - 0.05]))
+
+    extrude(layout.raised, spec.line_h)
+    extrude(layout.texture, spec.line_h * 0.55)
     r = spec.dot_d / 2
     dome = Manifold.sphere(r, 20).scale([1, 1, spec.dot_h / r])
     for x, y in layout.dots:
         parts.append(dome.translate([x, H - y, spec.plate_t]))
-    solid = Manifold.batch_boolean(parts, __import__("manifold3d").OpType.Add)
+    solid = Manifold.batch_boolean(parts, OpType.Add)
     mesh = solid.to_mesh()
     tm = trimesh.Trimesh(vertices=np.asarray(mesh.vert_properties)[:, :3], faces=np.asarray(mesh.tri_verts))
     buf = io.BytesIO()
     tm.export(buf, file_type="stl")
-    return buf.getvalue()
+    return buf.getvalue(), float(solid.volume())
+
+
+def to_stl(layout: Layout, spec: Spec | None = None) -> bytes:
+    return stl_with_volume(layout, spec)[0]
 
 
 # ---------------------------------------------------------------- export: PNG preview
-def to_png(layout: Layout, spec: Spec | None = None, dpi: int = 110) -> bytes:
+def to_png(layout: Layout, spec: Spec | None = None, dpi: int = 120, style: str = "relief",
+           show_ink: bool = True) -> bytes:
+    """style='relief': raised parts lit from the top-left like a real embossed sheet.
+    style='plan': flat black drawing. Blue ink = teacher-only annotations (never printed)."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from matplotlib.patches import Circle, PathPatch
+    from matplotlib.patches import Circle, PathPatch, Polygon as MPoly
     from matplotlib.path import Path as MPath
 
     spec = spec or Spec()
-    fig, ax = plt.subplots(figsize=(layout.width / 25.4, layout.height / 25.4), dpi=dpi)
-    ax.set_xlim(0, layout.width)
-    ax.set_ylim(layout.height, 0)
+    W, H, k = layout.width, layout.height, layout.corner
+    paper = "#f4f5f2" if style == "relief" else "white"
+    fig, ax = plt.subplots(figsize=(W / 25.4, H / 25.4), dpi=dpi)
+    fig.patch.set_alpha(0)
+    ax.set_xlim(-1.5, W + 1.5)
+    ax.set_ylim(H + 1.5, -1.5)
     ax.set_aspect("equal")
     ax.axis("off")
-    ax.add_patch(plt.Rectangle((0, 0), layout.width, layout.height, fill=False, ec="#999", lw=0.8))
-    polys = [layout.raised] if layout.raised.geom_type == "Polygon" else list(getattr(layout.raised, "geoms", []))
-    for p in polys:
-        if p.is_empty:
-            continue
+    sheet = [(0, k), (k, 0), (W, 0), (W, H), (0, H)] if k else [(0, 0), (W, 0), (W, H), (0, H)]
+    if style == "relief":
+        ax.add_patch(MPoly([(x + 0.8, y + 1.0) for x, y in sheet], closed=True, fc="#00000018", ec="none"))
+    ax.add_patch(MPoly(sheet, closed=True, fc=paper, ec="#c9ccc4", lw=0.6))
+
+    def path_of(p, dx=0.0, dy=0.0):
         verts, codes = [], []
         for ring in [p.exterior, *p.interiors]:
-            pts = list(ring.coords)
+            pts = [(x + dx, y + dy) for x, y in ring.coords]
             verts += pts
             codes += [MPath.MOVETO] + [MPath.LINETO] * (len(pts) - 2) + [MPath.CLOSEPOLY]
-        ax.add_patch(PathPatch(MPath(verts, codes), fc="black", ec="none"))
+        return MPath(verts, codes)
+
+    layers = [(layout.raised, 1.0), (layout.texture, 0.6)]
+    for geom, depth in layers:
+        for p in polygons(geom):
+            if style == "relief":
+                ax.add_patch(PathPatch(path_of(p, 0.45 * depth, 0.55 * depth), fc="#8d9289", ec="none"))
+                ax.add_patch(PathPatch(path_of(p, -0.25 * depth, -0.3 * depth), fc="#ffffff", ec="none"))
+                ax.add_patch(PathPatch(path_of(p), fc="#dfe1da", ec="none"))
+            else:
+                ax.add_patch(PathPatch(path_of(p), fc="black", ec="none"))
+    r = spec.dot_d / 2
     for x, y in layout.dots:
-        ax.add_patch(Circle((x, y), spec.dot_d / 2, fc="black"))
-    for text, x, y, size in layout.ink:
-        ax.text(x, y, text, fontsize=size * 2.2, color="#1a73e8", ha="left" if len(text) > 3 else "center", va="bottom")
+        if style == "relief":
+            ax.add_patch(Circle((x + 0.3, y + 0.38), r, fc="#8d9289", ec="none"))
+            ax.add_patch(Circle((x, y), r, fc="#e6e8e1", ec="none"))
+            ax.add_patch(Circle((x - 0.28, y - 0.3), r * 0.45, fc="#ffffff", ec="none"))
+        else:
+            ax.add_patch(Circle((x, y), r, fc="black"))
+    if show_ink:
+        for text, x, y, size in layout.ink:
+            ax.text(x, y, text, fontsize=size * 2.2, color="#2440c8", ha="left" if len(text) > 3 else "center",
+                    va="bottom", family="DejaVu Sans")
     fig.subplots_adjust(0, 0, 1, 1)
     buf = io.BytesIO()
-    fig.savefig(buf, format="png")
+    fig.savefig(buf, format="png", transparent=True)
     plt.close(fig)
     return buf.getvalue()

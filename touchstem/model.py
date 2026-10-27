@@ -37,6 +37,7 @@ class Element:
     label: str = ""
     value: str = ""
     key: int | None = None
+    state: str = "closed"          # switches only: "closed" | "open"
 
 
 @dataclass
@@ -74,7 +75,8 @@ class Circuit:
                 continue
             elements.append(Element(str(raw.get("id", f"e{i + 1}")), kind, a, b,
                                     str(raw.get("label", "") or ""),
-                                    normalize_label(str(raw.get("value", "") or ""))))
+                                    normalize_label(str(raw.get("value", "") or "")),
+                                    state="open" if str(raw.get("state", "")).lower() == "open" else "closed"))
         if not elements:
             raise CircuitError("в схеме нет элементов")
         c = cls(str(data.get("title", "") or ""), nodes, elements, str(data.get("notes", "") or ""), warnings)
@@ -128,9 +130,9 @@ class Circuit:
             if e.type == "wire":
                 out += [Element(e.id + "a", "wire", e.a, corner), Element(e.id + "b", "wire", corner, e.b)]
             elif horiz >= vert:
-                out += [Element(e.id, e.type, e.a, corner, e.label, e.value), Element(e.id + "w", "wire", corner, e.b)]
+                out += [Element(e.id, e.type, e.a, corner, e.label, e.value, state=e.state), Element(e.id + "w", "wire", corner, e.b)]
             else:
-                out += [Element(e.id + "w", "wire", e.a, corner), Element(e.id, e.type, corner, e.b, e.label, e.value)]
+                out += [Element(e.id + "w", "wire", e.a, corner), Element(e.id, e.type, corner, e.b, e.label, e.value, state=e.state)]
             self.warnings.append(f"элемент {e.id} был по диагонали — проложен под прямым углом")
         self.elements = out
 
@@ -176,7 +178,8 @@ class Circuit:
         return {
             "title": self.title,
             "nodes": [{"id": n.id, "x": n.x, "y": n.y} for n in self.nodes.values()],
-            "elements": [{"id": e.id, "type": e.type, "from": e.a, "to": e.b, "label": e.label, "value": e.value}
+            "elements": [{"id": e.id, "type": e.type, "from": e.a, "to": e.b, "label": e.label, "value": e.value,
+                          **({"state": e.state} if e.type == "switch" else {})}
                          for e in self.elements],
             "notes": self.notes,
         }

@@ -74,22 +74,23 @@ def symbol_for(kind: str) -> Symbol | None:
     if kind in ("ammeter", "voltmeter", "motor"):
         letter = {"ammeter": "а", "voltmeter": "в", "motor": "м"}[kind]
         return Symbol(14, 7, strokes=[_circle(7)], letters=[(letter, 0, 0)], gap=True)
-    if kind == "cell":   # long plate = +, short thick plate = -
-        return Symbol(4, 7, strokes=[[(-2, -7), (-2, 7)]], fills=[[(1.4, -3.5), (2.6, -3.5), (2.6, 3.5), (1.4, 3.5)]], gap=True)
+    if kind == "cell":   # long thin plate = +, short thick plate = -; gaps >= 3 mm for touch
+        return Symbol(5, 7, strokes=[[(-2.5, -7), (-2.5, 7)]],
+                      fills=[[(1.9, -3.5), (3.1, -3.5), (3.1, 3.5), (1.9, 3.5)]], gap=True)
     if kind == "battery":
-        return Symbol(10, 7, strokes=[[(-5, -7), (-5, 7)], [(1, -7), (1, 7)]],
-                      fills=[[(-2.6, -3.5), (-1.4, -3.5), (-1.4, 3.5), (-2.6, 3.5)],
-                             [(3.4, -3.5), (4.6, -3.5), (4.6, 3.5), (3.4, 3.5)]], gap=True)
+        return Symbol(14, 7, strokes=[[(-7, -7), (-7, 7)], [(2, -7), (2, 7)]],
+                      fills=[[(-3.1, -3.5), (-1.9, -3.5), (-1.9, 3.5), (-3.1, 3.5)],
+                             [(5.9, -3.5), (7.1, -3.5), (7.1, 3.5), (5.9, 3.5)]], gap=True)
     if kind == "capacitor":
-        return Symbol(4, 6, strokes=[[(-2, -6), (-2, 6)], [(2, -6), (2, 6)]], gap=True)
+        return Symbol(5, 6, strokes=[[(-2.5, -6), (-2.5, 6)], [(2.5, -6), (2.5, 6)]], gap=True)
     if kind == "switch":
         pivot = [(x - 7, y) for x, y in _circle(1.4, 16)]
         contact = [(x + 7, y) for x, y in _circle(1.4, 16)]
         return Symbol(14, 6, strokes=[[(-7, 0), (6, 6)]], fills=[pivot, contact], gap=True)
     if kind in ("diode", "led"):
-        sym = Symbol(12, 5, fills=[[(-4, -5), (4, 0), (-4, 5)]], strokes=[[(4, -5), (4, 5)]], gap=True)
-        if kind == "led":
-            sym.strokes += [[(1, 7), (5, 11)], [(-2, 7), (2, 11)]]
-            sym.half_width = 11
+        sym = Symbol(8, 5, fills=[[(-4, -5), (4, 0), (-4, 5)]], strokes=[[(4, -5), (4, 5)]], gap=True)
+        if kind == "led":  # one arrow, kept >= 3 mm from the body
+            sym.strokes += [[(-1, 8.5), (3, 12.5)], [(3, 12.5), (0.6, 12.5)], [(3, 12.5), (3, 10.1)]]
+            sym.half_width = 12.5
         return sym
     return Symbol(10, 5, strokes=[_rect(5, 5)], gap=True)

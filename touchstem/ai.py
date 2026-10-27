@@ -33,6 +33,8 @@ Rules:
 3. Wire segments are elements with "type": "wire".
 4. "type" must be one of: {", ".join(TYPES)}.
    Use "cell" for one galvanic cell, "battery" for several cells drawn together.
+   For cell/battery, "from" MUST be the + terminal (long thin plate), "to" the - terminal.
+   For a switch add "state": "open" if it is drawn open, otherwise "closed".
 5. "label" is the designator printed next to the symbol (R1, L, K, A, V...), "value"
    is the printed value with unit (e.g. "4,5 В", "10 Ом"). Empty string if absent.
 6. Do not invent components. If part of the image is unreadable, describe it in "notes".
@@ -74,5 +76,33 @@ def parse_circuit_image(image_bytes: bytes, mime_type: str, api_key: str, model:
             config=types.GenerateContentConfig(temperature=0, response_mime_type="application/json"),
         )
     except Exception as exc:  # network, quota, bad key
+        raise AIError(f"ошибка запроса к Gemini: {exc}") from exc
+    return _extract_json(resp.text or "")
+
+
+GRAPH_PROMPT = """You read a photo of a school math function graph or its formula.
+Return ONLY JSON: {"formula": "x^2 - 4", "x_min": -4, "x_max": 4, "y_min": -5, "y_max": 6, "title": "", "notes": ""}
+- formula uses only x, numbers, + - * / ^ ( ), sin cos tan sqrt abs log exp pi.
+- If the formula is printed, copy it. If only the curve is drawn, infer the simplest school formula that fits.
+- Axis limits: the visible range of the axes in the picture.
+- notes: in Russian, anything uncertain."""
+
+
+def parse_graph_image(image_bytes: bytes, mime_type: str, api_key: str, model: str = DEFAULT_MODEL) -> dict:
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError as exc:  # pragma: no cover
+        raise AIError("не установлен пакет google-genai") from exc
+    if not api_key:
+        raise AIError("нет GEMINI_API_KEY")
+    client = genai.Client(api_key=api_key)
+    try:
+        resp = client.models.generate_content(
+            model=model,
+            contents=[types.Part.from_bytes(data=image_bytes, mime_type=mime_type), GRAPH_PROMPT],
+            config=types.GenerateContentConfig(temperature=0, response_mime_type="application/json"),
+        )
+    except Exception as exc:
         raise AIError(f"ошибка запроса к Gemini: {exc}") from exc
     return _extract_json(resp.text or "")

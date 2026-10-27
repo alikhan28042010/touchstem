@@ -1,0 +1,2 @@
+Unbounded and IBM Plex Sans are licensed under the SIL Open Font License 1.1
+(https://openfontlicense.org). Files subset from github.com/google/fonts.

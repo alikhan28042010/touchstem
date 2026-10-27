@@ -1,11 +1,43 @@
 from streamlit.testing.v1 import AppTest
 
 
-def test_app_example_flow():
-    at = AppTest.from_file("../app.py", default_timeout=60)
+def _app():
+    at = AppTest.from_file("../app.py", default_timeout=120)
     at.run()
-    assert not at.exception
-    example = [b for b in at.button if b.label.startswith("Пример: series")][0]
-    example.click().run()
-    assert not at.exception
-    assert any("Тактильная версия" in s.value for s in at.subheader)
+    assert not at.exception, at.exception
+    return at
+
+
+def test_circuit_example_flow():
+    at = _app()
+    at.pills[0].set_value("Последовательная цепь").run()
+    assert not at.exception, at.exception
+    assert any("Тактильный лист" in m.value for m in at.markdown)
+    labels = [b.label for b in at.get("download_button")]
+    assert "Лист учителя, PDF" in labels and "Схема, STL" in labels
+
+
+def test_graph_flow():
+    at = _app()
+    at.segmented_control[0].set_value("График функции").run()
+    assert not at.exception, at.exception
+    assert any("Тактильный лист" in m.value for m in at.markdown)
+
+
+def test_bad_formula_shows_error():
+    at = _app()
+    at.segmented_control[0].set_value("График функции").run()
+    at.text_input[0].set_value("import os").run()
+    assert at.error, "expected an error message"
+
+
+def test_guide_route():
+    from touchstem.model import Circuit
+    from touchstem.share import encode_circuit
+    import json
+    from pathlib import Path
+    c = Circuit.from_dict(json.loads((Path(__file__).parents[1] / "examples/series.json").read_text(encoding="utf-8")))
+    at = AppTest.from_file("../app.py", default_timeout=120)
+    at.query_params["g"] = encode_circuit(c, "kk")
+    at.run()
+    assert not at.exception, at.exception
